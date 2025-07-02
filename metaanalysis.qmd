@@ -1,0 +1,839 @@
+---
+title: "Clinical Performance of Tumor-Informed versus Tumor-Agnostic ctDNA Assays for Colorectal Cancer Recurrence"
+subtitle: "A Systematic Review and Diagnostic Accuracy Meta-Analysis"
+author: 
+  - name: "Daniel G. Camblor*"
+    email: "dgonzalez@incliva.es"
+    url: "https://github.com/dgcamblor"
+  - name: "Belén Martínez-Castedo"
+  - name: "Jorge Martín-Arana"
+  - name: "Francisco Gimeno-Valiente"
+  - name: "Blanca García-Micó"
+  - name: "Francisco Martínez-Picó"
+  - name: "Víctor Seguí"
+  - name: "Miguel García-Bartolomé"
+  - name: "Diego González"
+  - name: "Alejandro Guimera"
+  - name: "Marisol Huerta"
+  - name: "Susana Roselló"
+  - name: "Valentina Gambardella"
+  - name: "Desamparados Roda"
+  - name: "Leon Pappas"
+  - name: "Aparna Parikh"
+  - name: "Juan A. Carbonell-Asins*"
+  - name: "Andrés Cervantes"
+  - name: "Noelia Tarazona"
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    toc-location: left
+    toc-expand: true  
+    number-sections: true
+    theme: cosmo
+    code-fold: true
+    code-tools: true
+    code-overflow: scroll
+    output-file: index.html
+    embed-resources: true
+    smooth-scroll: true
+    self-contained-math: true
+    fig-responsive: true
+    fig-cap-location: bottom
+    fig-align: center
+    anchor-sections: true
+execute:
+  freeze: auto
+  echo: true
+  warning: false
+  message: false
+---
+
+\* Main developers of the code.
+
+::: {.content-hidden}
+
+# Setup {.unnumbered}
+
+```{r}
+# Uncomment to use renv for package management (works with renv.lock for reproducibility)
+# renv::init()
+# renv::activate()
+# renv::deactivate(clean = TRUE)
+```
+
+```{r}
+load_packages <- function(packages) {
+  # Install packages
+  do.call(renv::install, as.list(packages))
+  packages_clean <- gsub("[^[:alnum:]_].*$", "", packages)
+
+  # Load packages
+  results <- lapply(packages_clean, require, character.only = TRUE)
+  names(results) <- packages_clean
+
+  invisible(packages_clean)
+}
+```
+
+```{r}
+packages <- c(
+  # General
+  "knitr",
+  "rmarkdown",
+  "tidyverse",
+  "cowplot",
+  "devtools",
+  "googlesheets4",
+  "ggrepel",
+  
+  # Meta-analysis
+  "meta",
+  "metafor",
+  "mada"
+  )
+
+load_packages(packages)
+
+theme_set(theme_bw())
+```
+
+```{r}
+for (file in list.files("R", pattern = "\\.R$", full.names = TRUE)) {
+  source(file)
+}
+```
+
+```{r}
+renv::snapshot()
+```
+
+# Loading the data {.unnumbered}
+
+## QUADAS-2
+
+```{r}
+quadas_raw <- read_tsv("data/quadas.tsv")
+
+quadas <- quadas_raw %>% 
+  pivot_longer(-Domain, names_to = "Study", values_to = "Score") %>%
+  mutate(
+    Domain = factor(Domain, levels = c("Patient Selection", "Index Test", "Reference Standard", "Flow and Timing")),
+    Study = gsub(" et al., ", "_", Study)
+  )
+```
+
+## Study stats
+
+```{r}
+data_raw <- read_tsv("data/studies_stats.tsv")
+
+data <- data_raw %>% 
+  mutate(
+    study = gsub(" et al., ", "_", study),
+  ) %>% 
+  filter(!is.na(setting)) %>%
+  rename_all(toupper) %>% 
+  mutate(YEAR = as.numeric(gsub("[^0-9]", "", STUDY))) %>%
+  select(c(STUDY, YEAR, SETTING, APPROACH, METHODOLOGY_CLEAN, ACADEMIC_COMMERCIAL, N, TP, FP, TN, FN))
+```
+
+```{r}
+data_landmark <- data %>% filter(SETTING == "Landmark")
+data_serial <- data %>% filter(SETTING == "Serial")
+```
+
+# Colors {.unnumbered}
+
+```{r}
+colors <- c(
+  "Agnostic" = "#C25757",
+  "Informed" = "#5C5D9E"
+)
+```
+
+:::
+
+# QUADAS-2
+
+QUADAS-2 is a tool for assessing the risk of bias and applicability of diagnostic accuracy studies. Here, we present the results of our QUADAS-2 assessment for the included studies.
+
+```{r}
+quadas %>%
+  mutate(Score = factor(Score, levels = c("High", "Unclear", "Low"))) %>%
+  count(Domain, Score) %>%
+  ggplot(aes(x = n, y = Domain, fill = Score)) +
+  geom_bar(stat = "identity", color = "black", linewidth = 0.3) +
+  geom_text(aes(label = n), 
+            position = position_stack(vjust = 0.5), 
+            size = 3.5, color = "black") +
+  scale_fill_manual(
+    values = c(
+      "Low"     = "#A1D99B", 
+      "Unclear" = "#FFD92F", 
+      "High"    = "#FC9272"
+    )
+  ) +
+  labs(
+    x = "Number of Studies",
+    y = "Domain",
+    fill = "Risk of Bias"
+  ) +
+  theme(
+    axis.title = element_text(size = 13),
+    axis.text = element_text(size = 11),
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 10)
+  )
+ggsave("results/plots/quadas2.png", width = 8, height = 5, dpi = 300)
+```
+
+# Number of studies
+
+```{r}
+data %>%
+  count(SETTING, APPROACH) %>%
+  ggplot(aes(x = SETTING, y = n, fill = APPROACH)) +
+  geom_bar(stat = "identity", position = "dodge", color = "black") +
+  geom_text(aes(label = n), vjust = 3, position = position_dodge(0.9), color = "white", size = 9) +
+  scale_fill_manual(values = colors) +
+  labs(x = "Setting", y = "Number of Studies", fill = "Study Type")
+```
+
+There are `r nrow(data_landmark) + nrow(data_serial)` study results included in the meta-analysis (corresponding to `r length(unique(data$STUDY))` studies; one study can provide results for both the landmark and serial settings), with `r nrow(data_landmark)` study results in the landmark setting and `r nrow(data_serial)` study results in the serial setting. The majority of studies are tumor-informed.
+
+# Descriptive analysis: univariate (DOR) approach
+
+As an initial exploratory analysis, we can use the diagnostic odds ratio (DOR) as a univariate measure of diagnostic accuracy. The DOR is a single summary measure that combines sensitivity and specificity into a single number, which is useful for certain analyses although not ideal for meta-regression, as explained throughout this document.
+
+The diagnostic odds ratio (DOR) can be expressed as:
+
+$$
+\text{DOR} = \frac{\text{TP} \times \text{TN}}{\text{FP} \times \text{FN}}
+$$
+
+## Deeks' test and funnel plot
+
+The first step of the meta-analysis is to check for publication bias. In the context of diagnostic accuracy studies, this is done using Deeks' test. This test is based on the idea that if there is no publication bias, the log odds ratio (logOR) should be symmetrically distributed in relation to the Effective Sample Size (ESS). 
+
+The ESS quantifies the amount of independent information contained in a sample, especially when the data are correlated. In the context of diagnostic accuracy studies, the ESS can be calculated as:
+
+$$
+\text{ESS} = \frac{TP \times TN}{TP + TN + FP + FN}
+$$
+
+The results from the univariate analysis (based on the DOR) are summarized in the following sections, including the Deeks' test.
+
+### Landmark setting
+
+```{r}
+m_landmark <- metabin(
+  data_landmark$TP,
+  data_landmark$TP + data_landmark$FP,
+  data_landmark$FN,
+  data_landmark$FN + data_landmark$TN,
+  data = data_landmark,
+  sm = "DOR"
+)
+
+m_landmark_sg <- metabin(
+  data_landmark$TP,
+  data_landmark$TP + data_landmark$FP,
+  data_landmark$FN,
+  data_landmark$FN + data_landmark$TN,
+  data = data_landmark,
+  subgroup = data_landmark$APPROACH,
+  sm = "DOR"
+)
+```
+
+```{r}
+summary(m_landmark_sg)
+```
+
+The heterogeneity is moderate, which is expected given the different study designs and populations included.
+
+```{r}
+m_landmark_bias <- metabias(m_landmark, method.bias = "Deeks"); m_landmark_bias
+```
+
+A p-value > 0.05 indicates that there is no evidence of publication bias. 
+
+### Serial setting
+
+```{r}
+m_serial <- metabin(
+  data_serial$TP,
+  data_serial$TP + data_serial$FP,
+  data_serial$FN,
+  data_serial$FN + data_serial$TN,
+  data = data_serial,
+  sm = "DOR"
+)
+
+m_serial_sg <- metabin(
+  data_serial$TP,
+  data_serial$TP + data_serial$FP,
+  data_serial$FN,
+  data_serial$FN + data_serial$TN,
+  data = data_serial,
+  subgroup = data_serial$APPROACH,
+  sm = "DOR"
+)
+```
+
+```{r}
+summary(m_serial_sg)
+```
+
+When evaluating the serial setting, the heterogeneity is lower in tumor-informed studies but increases dramatically in the agnostic studies. This is likely due to the fact that the agnostic studies are more heterogeneous in terms of the methodologies used (genomics, methylomics, and integrated approaches).
+
+```{r}
+m_serial_bias <- metabias(m_serial, method.bias = "Deeks"); m_serial_bias
+```
+
+Here, the p-value is < 0.05, suggesting that there is evidence of publication bias. In summary, the Deeks' test estimate is the slope coefficient from the regression of log DOR on 1/√ESS. Here, a positive estimate indicates that studies with smaller sample sizes (lower ESS) have larger log DORs.
+
+### Deeks' funnel plot
+
+```{r}
+#| output: false
+
+# We generate the funnel plot and extract the data to re-create it with ggplot
+pfunnel_landmark <- funnel(m_landmark_sg, yaxis = "ess", studlab = data_landmark$STUDY)
+
+pfunnel_lab_landmark <- paste0(
+  "Deeks' test p = ", signif(m_landmark_bias$p.value, 3), "; ",
+  "bias estimate = ", signif(m_landmark_bias$estimate[1], 3)
+)
+
+pfunnel_landmark <- data.frame(
+  x = pfunnel_landmark$xvals, 
+  y = pfunnel_landmark$yvals, 
+  study = data_landmark$STUDY, 
+  approach = data_landmark$APPROACH,
+  size = data_landmark$N
+  ) %>% 
+  ggplot(aes(x = log(x), y = y, text = study, group = approach, color = approach)) +
+  geom_line(stat="smooth", method = "lm", size = 0.8, alpha = 0.5) +
+  geom_point(aes(size = size)) +
+  # geom_text_repel(aes(label = study), size = 3, max.overlaps = 20) +
+  scale_color_manual(values = colors) +
+  scale_y_reverse() + 
+  labs(
+    title = "Landmark setting",
+    subtitle = pfunnel_lab_landmark,
+    x = "Log(Diagnostic Odds Ratio)",
+    y = "1 / sqrt(ESS)"
+  )
+```
+
+```{r}
+#| output: false
+
+pfunnel_serial <- funnel(m_serial, yaxis = "ess", studlab = data_serial$STUDY)
+
+pfunnel_lab_serial <- paste0(
+  "Deeks' test p = ", signif(m_serial_bias$p.value, 3), "; ",
+  "bias estimate = ", signif(m_serial_bias$estimate[1], 3)
+)
+
+pfunnel_serial <- data.frame(
+  x = pfunnel_serial$xvals, 
+  y = pfunnel_serial$yvals, 
+  study = data_serial$STUDY, 
+  approach = data_serial$APPROACH,
+  size = data_serial$N
+  ) %>% 
+  ggplot(aes(x = log(x), y = y, text = study, group = approach, color = approach)) +
+  geom_line(stat="smooth", method = "lm", size = 0.8, alpha = 0.5) +
+  geom_point(aes(size = size)) +
+  # geom_text_repel(aes(label = study), size = 3, max.overlaps = 20) +
+  labs(x = "Log(Diagnostic Odds Ratio)", y = "1 / sqrt(ESS)") +
+  scale_color_manual(values = colors) +
+  scale_y_reverse() + 
+  labs(
+    title = "Serial setting",
+    subtitle = pfunnel_lab_serial,
+    x = " ",
+    y = ""
+  )
+```
+
+```{r}
+#| output: false
+
+png("results/plots/pfunnel_landmark_serial.png", width = 1200, height = 600, res = 140)
+cowplot::plot_grid(
+  pfunnel_landmark + theme(legend.position = "none"),
+  pfunnel_serial,
+  ncol = 2, 
+  labels = c("A", "B"), 
+  label_size = 12,
+  rel_widths = c(0.8, 1)
+)
+dev.off()
+```
+
+```{r}
+knitr::include_graphics("results/plots/pfunnel_landmark_serial.png")
+```
+
+
+## Forest plot
+
+### Landmark setting
+
+```{r}
+madad_landmark <- madad(data_landmark %>% mutate(names = STUDY))
+```
+
+```{r}
+meta::forest(
+  m_landmark_sg, 
+  studlab = data_landmark$STUDY, 
+  col.diamond = "black", 
+  file = "results/plots/pforest_landmark.png",
+  width = 850
+  )
+
+knitr::include_graphics("results/plots/pforest_landmark.png")
+```
+
+### Serial setting
+
+```{r}
+madad_serial <- madad(data_serial %>% mutate(names = STUDY))
+```
+
+```{r}
+meta::forest(
+  m_serial_sg, 
+  studlab = data_serial$STUDY, 
+  col.diamond = "black", 
+  file = "results/plots/pforest_serial.png",
+  width = 850
+  )
+
+knitr::include_graphics("results/plots/pforest_serial.png")
+```
+
+# Bivariate Meta-Analysis
+
+As stated before, bivariate meta-analysis according to the Reitsma model combines the sensivitiy and specificity. The model assumes that the true positive rate (TPR) and false positive rate (FPR) are correlated.
+
+## Landmark vs. Serial
+
+We can perform a initial bivariate meta-analysis comparison of the landmark and serial data. It is expected that the serial analysis of ctDNA yields a more accurate assessment of the risk of recurrence than the landmark analysis.
+
+```{r}
+fit_landmark <- reitsma(data_landmark)
+fit_serial <- reitsma(data_serial)
+```
+
+```{r}
+#| output: false
+
+png("results/plots/sroc_global.png", width = 550, height = 550, res = 120)
+
+# Extract the data for the Landmark and Serial SROC curves
+landmark_sroc <- sroc(fit_landmark)
+serial_sroc <- sroc(fit_serial)
+
+# Start with a blank plot for the SROC curves
+plot(
+  landmark_sroc, 
+  xlim = c(0, 0.3), 
+  ylim = c(0, 1), 
+  main = "Landmark vs. Serial", 
+  xlab = "False Positive Rate",
+  ylab = "Sensitivity",
+  type = "n"  # 'type = "n"' makes a blank plot
+  )  
+
+# Add the SROC curves
+lines(landmark_sroc, col = "#3E6D9C", lwd = 2)
+lines(serial_sroc, col = "#FD841F", lwd = 2)
+
+# Add confidence ellipses
+ROCellipse(fit_landmark, pch = 1, col = "#3E6D9C", add = TRUE)  # Landmark ellipses
+ROCellipse(fit_serial, pch = 2, col = "#FD841F", add = TRUE)  # Serial ellipses
+
+# Add points
+points(fpr(data_landmark), sens(data_landmark), col = "#3E6D9C", cex = 0.5)
+points(fpr(data_serial), sens(data_serial), col = "#FD841F", pch = 2, cex = 0.5)
+
+# Add a legend
+legend("bottomright", legend = c("Landmark", "Serial"), col = c("#3E6D9C", "#FD841F"), pch = 1:2, lty = 1:2)
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics("results/plots/sroc_global.png")
+```
+
+```{r}
+fit_all <- reitsma(data, formula = cbind(tsens, tfpr) ~ SETTING)
+summary(fit_all)
+```
+
+To have a clearer picture of the results, we can transform logit estimates into percentages.
+
+- The intercept represents the base value of the reference category.
+- The logit estimate below corresponds to the (logit) difference 
+
+```{r}
+summary(fit_all)$coefficients %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Var") %>%
+  select(Var, Estimate, `95%ci.lb`, `95%ci.ub`) %>%
+  mutate(
+    Measure = case_when(
+      str_detect(Var, "^tsens") ~ "Sensitivity",
+      str_detect(Var, "^tfpr") ~ "False Positive Rate",
+      TRUE ~ NA_character_
+    ),
+    Type = case_when(
+      str_detect(Var, "Intercept") ~ "Intercept",
+      str_detect(Var, "Serial") ~ "Effect",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  # Spread intercepts to join with effects
+  group_by(Measure) %>%
+  mutate(
+    Intercept_Estimate = Estimate[Type == "Intercept"],
+    Intercept_LB = `95%ci.lb`[Type == "Intercept"],
+    Intercept_UB = `95%ci.ub`[Type == "Intercept"]
+  ) %>%
+  ungroup() %>%
+  # Calculate combined logit for effects, or keep intercept
+  mutate(
+    Logit = if_else(Type == "Effect", Estimate + Intercept_Estimate, Estimate),
+    Logit_LB = if_else(Type == "Effect", `95%ci.lb` + Intercept_LB, `95%ci.lb`),
+    Logit_UB = if_else(Type == "Effect", `95%ci.ub` + Intercept_UB, `95%ci.ub`),
+    Probability = plogis(Logit),
+    Probability_LB = plogis(Logit_LB),
+    Probability_UB = plogis(Logit_UB)
+  ) %>%
+  select(Measure, Type, Probability, Probability_LB, Probability_UB) %>% 
+  mutate(
+    Type = case_when(
+      Type == "Intercept" ~ "Landmark",
+      Type == "Effect" ~ "Serial"
+    )
+  ) %>% 
+  knitr::kable()
+```
+
+Using a serial approach significantly increases the sensitivity of recurrence detection compared to a landmark approach. The true-false positive rate raises slightly, but the increase is non-significant.
+
+## Tumor-Informed vs. Tumor-Agnostic
+
+```{r}
+data_landmark_inf <- data_landmark %>% filter(APPROACH == "Informed")
+data_landmark_agn <- data_landmark %>% filter(APPROACH == "Agnostic")
+
+data_serial_inf <- data_serial %>% filter(APPROACH == "Informed")
+data_serial_agn <- data_serial %>% filter(APPROACH == "Agnostic")
+```
+
+#### Landmark setting
+
+```{r}
+fit_landmark_inf <- reitsma(data_landmark_inf)
+fit_landmark_agn <- reitsma(data_landmark_agn)
+```
+
+##### SROC curves
+
+```{r}
+#| output: false
+
+png("results/plots/sroc_landmark.png", width = 550, height = 550, res = 120)
+
+# Extract the data for the Informed and Agnostic SROC curves
+landmark_inf_sroc <- sroc(fit_landmark_inf)
+landmark_agn_sroc <- sroc(fit_landmark_agn)
+
+# Start with a blank plot for the SROC curves
+plot(
+  landmark_inf_sroc, 
+  xlim = c(0, 0.3), 
+  ylim = c(0, 1), 
+  main = "Landmark setting", 
+  xlab = "False Positive Rate",
+  ylab = "Sensitivity",
+  type = "n"
+  )
+
+# Add the SROC curves
+lines(landmark_inf_sroc, col = colors["Informed"], lwd = 2)
+lines(landmark_agn_sroc, col = colors["Agnostic"], lwd = 2)
+
+# Add confidence ellipses
+ROCellipse(fit_landmark_inf, pch = 1, col = colors["Informed"], add = TRUE)  # Landmark ellipses
+ROCellipse(fit_landmark_agn, pch = 2, col = colors["Agnostic"], add = TRUE)  # Serial ellipses
+
+# Add points
+points(fpr(data_landmark_inf), sens(data_landmark_inf), col = colors["Informed"], cex = 0.5)
+points(fpr(data_landmark_agn), sens(data_landmark_agn), col = colors["Agnostic"], pch = 2, cex = 0.5)
+
+# Add a legend
+legend("bottomright", legend = c("Informed", "Agnostic"), col = c(colors["Informed"], colors["Agnostic"]), pch = 1:2, lty = 1:2)
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics("results/plots/sroc_landmark.png")
+```
+
+##### Bivariate modeling
+
+```{r}
+fit_landmark <- reitsma(data_landmark, formula = cbind(tsens, tfpr) ~ APPROACH)
+summary(fit_landmark)
+```
+
+```{r}
+summary(fit_landmark)$coefficients %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Var") %>%
+  select(Var, Estimate, `95%ci.lb`, `95%ci.ub`) %>%
+  mutate(
+    Measure = case_when(
+      str_detect(Var, "^tsens") ~ "Sensitivity",
+      str_detect(Var, "^tfpr") ~ "False Positive Rate",
+      TRUE ~ NA_character_
+    ),
+    Type = case_when(
+      str_detect(Var, "Intercept") ~ "Intercept",
+      str_detect(Var, "Informed") ~ "Effect",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  # Spread intercepts to join with effects
+  group_by(Measure) %>%
+  mutate(
+    Intercept_Estimate = Estimate[Type == "Intercept"],
+    Intercept_LB = `95%ci.lb`[Type == "Intercept"],
+    Intercept_UB = `95%ci.ub`[Type == "Intercept"]
+  ) %>%
+  ungroup() %>%
+  # Calculate combined logit for effects, or keep intercept
+  mutate(
+    Logit = if_else(Type == "Effect", Estimate + Intercept_Estimate, Estimate),
+    Logit_LB = if_else(Type == "Effect", `95%ci.lb` + Intercept_LB, `95%ci.lb`),
+    Logit_UB = if_else(Type == "Effect", `95%ci.ub` + Intercept_UB, `95%ci.ub`),
+    Probability = plogis(Logit),
+    Probability_LB = plogis(Logit_LB),
+    Probability_UB = plogis(Logit_UB)
+  ) %>%
+  select(Measure, Type, Probability, Probability_LB, Probability_UB) %>% 
+  mutate(
+    Type = case_when(
+      Type == "Intercept" ~ "Agnostic",
+      Type == "Effect" ~ "Informed"
+    )
+  ) %>% 
+  knitr::kable()
+```
+
+#### Serial setting
+
+```{r}
+fit_serial_inf <- reitsma(data_serial_inf)
+fit_serial_agn <- reitsma(data_serial_agn)
+```
+
+##### SROC curves
+
+```{r}
+#| output: false
+
+png("results/plots/sroc_serial.png", width = 550, height = 550, res = 120)
+
+# Extract the data for the Informed and Agnostic SROC curves
+serial_inf_sroc <- sroc(fit_serial_inf)
+serial_agn_sroc <- sroc(fit_serial_agn)
+
+# Start with a blank plot for the SROC curves
+plot(
+  serial_inf_sroc, 
+  xlim = c(0, 0.3), 
+  ylim = c(0, 1), 
+  main = "Serial setting", 
+  xlab = "False Positive Rate",
+  ylab = "Sensitivity",
+  type = "n"  # 'type = "n"' makes a blank plot
+  )
+
+# Add the SROC curves
+lines(serial_inf_sroc, col = colors["Informed"], lwd = 2)
+lines(serial_agn_sroc, col = colors["Agnostic"], lwd = 2)
+
+# Add confidence ellipses
+ROCellipse(fit_serial_inf, pch = 1, col = colors["Informed"], add = TRUE)
+ROCellipse(fit_serial_agn, pch = 2, col = colors["Agnostic"], add = TRUE)
+
+# Add points
+points(fpr(data_serial_inf), sens(data_serial_inf), col = colors["Informed"], cex = 0.5)
+points(fpr(data_serial_agn), sens(data_serial_agn), col = colors["Agnostic"], pch = 2, cex = 0.5)
+
+# Add a legend
+legend("bottomright", legend = c("Informed", "Agnostic"), col = c(colors["Informed"], colors["Agnostic"]), pch = 1:2, lty = 1:2)
+
+dev.off()
+```
+
+```{r}
+knitr::include_graphics("results/plots/sroc_serial.png")
+```
+
+##### Bivariate modeling
+
+```{r}
+fit_serial <- reitsma(data_serial, formula = cbind(tsens, tfpr) ~ APPROACH)
+summary(fit_serial)
+```
+
+```{r}
+summary(fit_serial)$coefficients %>% 
+  as.data.frame() %>% 
+  rownames_to_column("Var") %>%
+  select(Var, Estimate, `95%ci.lb`, `95%ci.ub`) %>%
+  mutate(
+    Measure = case_when(
+      str_detect(Var, "^tsens") ~ "Sensitivity",
+      str_detect(Var, "^tfpr") ~ "False Positive Rate",
+      TRUE ~ NA_character_
+    ),
+    Type = case_when(
+      str_detect(Var, "Intercept") ~ "Intercept",
+      str_detect(Var, "Informed") ~ "Effect",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  # Spread intercepts to join with effects
+  group_by(Measure) %>%
+  mutate(
+    Intercept_Estimate = Estimate[Type == "Intercept"],
+    Intercept_LB = `95%ci.lb`[Type == "Intercept"],
+    Intercept_UB = `95%ci.ub`[Type == "Intercept"]
+  ) %>%
+  ungroup() %>%
+  # Calculate combined logit for effects, or keep intercept
+  mutate(
+    Logit = if_else(Type == "Effect", Estimate + Intercept_Estimate, Estimate),
+    Logit_LB = if_else(Type == "Effect", `95%ci.lb` + Intercept_LB, `95%ci.lb`),
+    Logit_UB = if_else(Type == "Effect", `95%ci.ub` + Intercept_UB, `95%ci.ub`),
+    Probability = plogis(Logit),
+    Probability_LB = plogis(Logit_LB),
+    Probability_UB = plogis(Logit_UB)
+  ) %>%
+  select(Measure, Type, Probability, Probability_LB, Probability_UB) %>% 
+  mutate(
+    Type = case_when(
+      Type == "Intercept" ~ "Agnostic",
+      Type == "Effect" ~ "Informed"
+    )
+  ) %>% 
+  knitr::kable()
+```
+
+## Effect of methodology and assay type
+
+### Landmark setting
+
+```{r}
+reitsma(
+  data_landmark %>%
+    filter(APPROACH == "Informed") %>%
+    mutate(METHODOLOGY_CLEAN = factor(METHODOLOGY_CLEAN, levels = c("Panel", "Genome-wide"))),
+  formula = cbind(tsens, tfpr) ~ METHODOLOGY_CLEAN
+  ) %>%
+  summary()
+
+reitsma(
+  data_landmark %>%
+    filter(APPROACH == "Agnostic") %>%
+    mutate(METHODOLOGY_CLEAN = factor(METHODOLOGY_CLEAN, levels = c("Single-omic", "Multi-omic"))),
+  formula = cbind(tsens, tfpr) ~ METHODOLOGY_CLEAN
+  ) %>%
+  summary()
+```
+
+### Serial setting
+
+```{r}
+reitsma(
+  data_serial %>%
+    filter(APPROACH == "Informed") %>%
+    mutate(METHODOLOGY_CLEAN = factor(METHODOLOGY_CLEAN, levels = c("Panel", "Genome-wide"))),
+  formula = cbind(tsens, tfpr) ~ METHODOLOGY_CLEAN
+  ) %>%
+  summary()
+
+reitsma(
+  data_serial %>%
+    filter(APPROACH == "Agnostic") %>%
+    mutate(METHODOLOGY_CLEAN = factor(METHODOLOGY_CLEAN, levels = c("Single-omic", "Multi-omic"))),
+  formula = cbind(tsens, tfpr) ~ METHODOLOGY_CLEAN
+  ) %>%
+  summary()
+```
+
+We do not seem to have enough evidence to conclude that the methodology used (panel vs. genome-wide) has a significant effect on the sensitivity and false positive rate. This may be due to a lack of enough studies in each subgroup, limiting the power of the analysis.
+
+## Academic vs. Commercial assays
+
+An interesting question is whether the type of assay (academic vs. commercial) has an impact on the sensitivity and false positive rate of the ctDNA assays, although this is not a primary objective of the study, and interpretation should be done with caution.
+
+### Landmark setting
+
+```{r}
+reitsma(
+  data_landmark %>%
+    filter(APPROACH == "Informed") %>%
+    mutate(ACADEMIC_COMMERCIAL = factor(ACADEMIC_COMMERCIAL, levels = c("Academic", "Commercial"))),
+  formula = cbind(tsens, tfpr) ~ ACADEMIC_COMMERCIAL
+  ) %>%
+  summary()
+
+reitsma(
+  data_landmark %>%
+    filter(APPROACH == "Agnostic") %>%
+    mutate(ACADEMIC_COMMERCIAL = factor(ACADEMIC_COMMERCIAL, levels = c("Academic", "Commercial"))),
+  formula = cbind(tsens, tfpr) ~ ACADEMIC_COMMERCIAL
+  ) %>%
+  summary()
+```
+
+### Serial setting
+
+```{r}
+reitsma(
+  data_serial %>%
+    filter(APPROACH == "Informed") %>%
+    mutate(ACADEMIC_COMMERCIAL = factor(ACADEMIC_COMMERCIAL, levels = c("Academic", "Commercial"))),
+  formula = cbind(tsens, tfpr) ~ ACADEMIC_COMMERCIAL
+  ) %>%
+  summary()
+
+reitsma(
+  data_serial %>%
+    filter(APPROACH == "Agnostic") %>%
+    mutate(ACADEMIC_COMMERCIAL = factor(ACADEMIC_COMMERCIAL, levels = c("Academic", "Commercial"))),
+  formula = cbind(tsens, tfpr) ~ ACADEMIC_COMMERCIAL
+  ) %>%
+  summary()
+```
+
+# Session info
+
+```{r}
+sessionInfo()
+```
+
