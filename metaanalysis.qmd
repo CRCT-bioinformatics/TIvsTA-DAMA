@@ -63,15 +63,30 @@ execute:
 ```
 
 ```{r}
+# Ensure a CRAN mirror is set
+if (is.null(getOption("repos")) || getOption("repos")["CRAN"] == "@CRAN@") {
+  options(repos = c(CRAN = "https://cloud.r-project.org"))
+}
+
 load_packages <- function(packages) {
-  # Install packages
-  do.call(renv::install, as.list(packages))
+  # Clean package names (remove versions like 'tidyverse@1.3.0')
   packages_clean <- gsub("[^[:alnum:]_].*$", "", packages)
+  
+  # Check which packages are NOT installed
+  installed_pkgs <- rownames(installed.packages())
+  to_install <- packages[!packages_clean %in% installed_pkgs]
+  
+  # Install only missing packages using renv
+  if (length(to_install) > 0) {
+    message("Installing missing packages: ", paste(to_install, collapse = ", "))
+    renv::install(to_install)
+  } else {
+    message("All packages are already installed.")
+  }
 
-  # Load packages
+  # Load all packages
   results <- lapply(packages_clean, require, character.only = TRUE)
-  names(results) <- packages_clean
-
+  
   invisible(packages_clean)
 }
 ```
@@ -113,10 +128,11 @@ renv::snapshot()
 ## QUADAS-2
 
 ```{r}
-quadas_raw <- read_tsv("data/quadas.tsv")
+quadas_raw <- read_tsv("data/quadas_v2.tsv")
 
 quadas <- quadas_raw %>% 
-  pivot_longer(-Domain, names_to = "Study", values_to = "Score") %>%
+  rename(Study = Domain) %>% 
+  pivot_longer(-Study, names_to = "Domain", values_to = "Score") %>%
   mutate(
     Domain = factor(Domain, levels = c("Patient Selection", "Index Test", "Reference Standard", "Flow and Timing")),
     Study = gsub(" et al., ", "_", Study)
@@ -126,7 +142,7 @@ quadas <- quadas_raw %>%
 ## Study stats
 
 ```{r}
-data_raw <- read_tsv("data/studies_stats.tsv")
+data_raw <- read_tsv("data/studies_stats_v2.tsv")
 
 data <- data_raw %>% 
   mutate(
@@ -185,6 +201,7 @@ quadas %>%
     legend.title = element_text(size = 12),
     legend.text = element_text(size = 10)
   )
+ggsave("results/plots/quadas2.pdf", width = 8, height = 5, dpi = 300)
 ggsave("results/plots/quadas2.png", width = 8, height = 5, dpi = 300)
 ```
 
@@ -363,7 +380,18 @@ pfunnel_serial <- data.frame(
 ```{r}
 #| output: false
 
-png("results/plots/pfunnel_landmark_serial.png", width = 1200, height = 600, res = 140)
+pdf("results/plots/pfunnel_landmark_serial.pdf", width = 10, height = 5)
+cowplot::plot_grid(
+  pfunnel_landmark + theme(legend.position = "none"),
+  pfunnel_serial,
+  ncol = 2, 
+  labels = c("A", "B"), 
+  label_size = 12,
+  rel_widths = c(0.8, 1)
+)
+dev.off()
+
+png("results/plots/pfunnel_landmark_serial.png", width = 2600, height = 1200, res = 300)
 cowplot::plot_grid(
   pfunnel_landmark + theme(legend.position = "none"),
   pfunnel_serial,
@@ -386,6 +414,7 @@ knitr::include_graphics("results/plots/pfunnel_landmark_serial.png")
 
 ```{r}
 madad_landmark <- madad(data_landmark %>% mutate(names = STUDY))
+madad_landmark
 ```
 
 ```{r}
@@ -393,10 +422,20 @@ meta::forest(
   m_landmark_sg, 
   studlab = data_landmark$STUDY, 
   col.diamond = "black", 
-  file = "results/plots/pforest_landmark.png",
-  width = 850
+  file = "results/plots/pforest_landmark.pdf",
+  width = 12
   )
 
+meta::forest(
+  m_landmark_sg, 
+  studlab = data_landmark$STUDY, 
+  col.diamond = "black", 
+  file = "results/plots/pforest_landmark.png",
+  width = 900
+  )
+```
+
+```{r}
 knitr::include_graphics("results/plots/pforest_landmark.png")
 ```
 
@@ -404,6 +443,7 @@ knitr::include_graphics("results/plots/pforest_landmark.png")
 
 ```{r}
 madad_serial <- madad(data_serial %>% mutate(names = STUDY))
+madad_serial
 ```
 
 ```{r}
@@ -411,12 +451,138 @@ meta::forest(
   m_serial_sg, 
   studlab = data_serial$STUDY, 
   col.diamond = "black", 
-  file = "results/plots/pforest_serial.png",
-  width = 850
+  file = "results/plots/pforest_serial.pdf",
+  width = 12
   )
 
+meta::forest(
+  m_serial_sg, 
+  studlab = data_serial$STUDY, 
+  col.diamond = "black", 
+  file = "results/plots/pforest_serial.png",
+  width = 900
+  )
+```
+
+```{r}
 knitr::include_graphics("results/plots/pforest_serial.png")
 ```
+
+# Descriptive analysis: pooled sensitivity, specificity, PPV and NPV
+
+We can also perform a univariate meta-analysis of sensitivity and specificity separately, using a random-effects model. This approach does not account for the correlation between sensitivity and specificity, which is a limitation. However, it provides a useful summary of the data.
+
+In this section, we present, in order, the pooled estimates of sensitivity, specificity, positive predictive value (PPV), and negative predictive value (NPV) for both the landmark and serial settings.
+
+## Landmark setting
+
+```{r}
+# Sensitivity
+m_land_sens <- run_diagnostic_prop(
+  event = data_landmark$TP, 
+  n = data_landmark$TP + data_landmark$FN, 
+  data = data_landmark, 
+  label = "Sensitivity", 
+  APPROACH = data_landmark$APPROACH
+)
+
+# Specificity
+m_land_spec <- run_diagnostic_prop(
+  event = data_landmark$TN, 
+  n = data_landmark$TN + data_landmark$FP, 
+  data = data_landmark, 
+  label = "Specificity", 
+  APPROACH = data_landmark$APPROACH
+)
+
+# PPV
+m_land_ppv <- run_diagnostic_prop(
+  event = data_landmark$TP, 
+  n = data_landmark$TP + data_landmark$FP, 
+  data = data_landmark, 
+  label = "PPV", 
+  APPROACH = data_landmark$APPROACH
+)
+
+# NPV
+m_land_npv <- run_diagnostic_prop(
+  event = data_landmark$TN, 
+  n = data_landmark$TN + data_landmark$FN, 
+  data = data_landmark, 
+  label = "NPV", 
+  APPROACH = data_landmark$APPROACH
+)
+```
+
+```{r}
+save_forest(m_land_sens, data_landmark$STUDY, "pforest_landmark_sens")
+save_forest(m_land_spec, data_landmark$STUDY, "pforest_landmark_spec")
+save_forest(m_land_ppv,  data_landmark$STUDY, "pforest_landmark_ppv")
+save_forest(m_land_npv,  data_landmark$STUDY, "pforest_landmark_npv")
+
+knitr::include_graphics(c(
+  "results/plots/pforest_landmark_sens.png",
+  "results/plots/pforest_landmark_spec.png",
+  "results/plots/pforest_landmark_ppv.png",
+  "results/plots/pforest_landmark_npv.png"
+))
+```
+
+## Serial setting
+
+```{r}
+# Sensitivity
+m_serial_sens <- run_diagnostic_prop(
+  event = data_serial$TP, 
+  n = data_serial$TP + data_serial$FN, 
+  data = data_serial, 
+  label = "Sensitivity", 
+  APPROACH = data_serial$APPROACH
+)
+
+# Specificity
+m_serial_spec <- run_diagnostic_prop(
+  event = data_serial$TN, 
+  n = data_serial$TN + data_serial$FP, 
+  data = data_serial, 
+  label = "Specificity", 
+  APPROACH = data_serial$APPROACH
+)
+
+# PPV
+m_serial_ppv <- run_diagnostic_prop(
+  event = data_serial$TP, 
+  n = data_serial$TP + data_serial$FP, 
+  data = data_serial, 
+  label = "PPV", 
+  APPROACH = data_serial$APPROACH
+)
+
+# NPV
+m_serial_npv <- run_diagnostic_prop(
+  event = data_serial$TN, 
+  n = data_serial$TN + data_serial$FN, 
+  data = data_serial, 
+  label = "NPV", 
+  APPROACH = data_serial$APPROACH
+)
+```
+
+```{r}
+save_forest(m_serial_sens, data_serial$STUDY, "pforest_serial_sens")
+save_forest(m_serial_spec, data_serial$STUDY, "pforest_serial_spec")
+save_forest(m_serial_ppv,  data_serial$STUDY, "pforest_serial_ppv")
+save_forest(m_serial_npv,  data_serial$STUDY, "pforest_serial_npv")
+
+knitr::include_graphics(c(
+  "results/plots/pforest_serial_sens.png",
+  "results/plots/pforest_serial_spec.png",
+  "results/plots/pforest_serial_ppv.png",
+  "results/plots/pforest_serial_npv.png"
+))
+```
+
+
 
 # Bivariate Meta-Analysis
 
@@ -551,7 +717,7 @@ fit_landmark_agn <- reitsma(data_landmark_agn)
 ```{r}
 #| output: false
 
-png("results/plots/sroc_landmark.png", width = 550, height = 550, res = 120)
+png("results/plots/sroc_landmark.png", width = 610, height = 610, res = 140)
 
 # Extract the data for the Informed and Agnostic SROC curves
 landmark_inf_sroc <- sroc(fit_landmark_inf)
@@ -653,7 +819,7 @@ fit_serial_agn <- reitsma(data_serial_agn)
 ```{r}
 #| output: false
 
-png("results/plots/sroc_serial.png", width = 550, height = 550, res = 120)
+png("results/plots/sroc_serial.png", width = 610, height = 610, res = 140)
 
 # Extract the data for the Informed and Agnostic SROC curves
 serial_inf_sroc <- sroc(fit_serial_inf)
